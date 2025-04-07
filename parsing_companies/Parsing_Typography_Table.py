@@ -3,19 +3,6 @@ from bs4 import BeautifulSoup
 import json
 import pandas as pd
 import re
-from urllib.parse import urlparse
-from dotenv import load_dotenv
-import os
-
-# Загрузка переменных из .env файла
-load_dotenv()
-
-# Получение API-ключа и ID поисковой системы из .env
-api_key = os.getenv("GOOGLE_API_KEY")
-cx = os.getenv("GOOGLE_CSE_ID")
-
-# Переменная города (можно менять)
-city = "Новосибирск"
 
 # Заголовки для имитации браузера
 headers = {
@@ -26,8 +13,15 @@ headers = {
 phone_pattern = re.compile(r'(\+?\d[\d\s()-]{8,}\d)')
 email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
 
-# Запрос для поиска полиграфических услуг в указанном городе
-query = f"полиграфические услуги типография {city} site:*.ru | site:*.com -inurl:(форум | блог)"
+# Чтение списка сайтов из файла websites.txt
+def load_websites(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            websites = [line.strip() for line in file if line.strip()]
+        return websites
+    except FileNotFoundError:
+        print(f"Файл {file_path} не найден.")
+        return []
 
 # Функция парсинга сайта
 def parse_website(url):
@@ -39,7 +33,6 @@ def parse_website(url):
         try:
             soup = BeautifulSoup(response.content, 'html.parser', from_encoding=response.encoding)
         except UnicodeDecodeError:
-            # Если кодировка некорректна, пробуем принудительно UTF-8 с заменой ошибок
             soup = BeautifulSoup(response.content.decode('utf-8', errors='replace'), 'html.parser')
 
         # 1. Наименование компании
@@ -47,22 +40,22 @@ def parse_website(url):
         if not company_name or company_name == "Не найдено":
             h1 = soup.find('h1')
             company_name = h1.text.strip() if h1 else "Не найдено"
-        # Очистка от некорректных символов
         company_name = ''.join(c if ord(c) < 128 or c.isprintable() else ' ' for c in company_name)
 
         # 2. Адрес сайта
         website = url
 
-        # 3. Номер телефона
-        phone = "Не найдено"
+        # 3. Все номера телефонов
+        phones = []
         for text in soup.stripped_strings:
             try:
-                phone_match = phone_pattern.search(text)
-                if phone_match:
-                    phone = phone_match.group()
-                    break
+                phone_matches = phone_pattern.findall(text)
+                for match in phone_matches:
+                    if match not in phones:  # Убираем дубликаты
+                        phones.append(match.strip())
             except UnicodeDecodeError:
                 continue
+        phone_str = ", ".join(phones) if phones else "Не найдено"
 
         # 4. Email
         email = "Не найдено"
@@ -80,7 +73,7 @@ def parse_website(url):
         machine_keywords = ['печатная машина', 'принтер', 'оборудование', 'press', 'printer', 'machine']
         for text in soup.stripped_strings:
             try:
-                if any(keyword.lower() in Civilian: в text.lower() для keyword in machine_keywords):
+                if any(keyword.lower() in text.lower() for keyword in machine_keywords):
                     printing_machines = text.strip()
                     break
             except UnicodeDecodeError:
@@ -89,67 +82,49 @@ def parse_website(url):
         return {
             "Наименование Компании": company_name,
             "Адрес сайта": website,
-            "Номер телефона": phone,
+            "Номер телефона": phone_str,
             "Email": email,
             "Печатные машины": printing_machines
         }
 
     except (requests.RequestException, Exception) as e:
         print(f"Ошибка при парсинге {url}: {e}")
-        return None  # Возвращаем None для проблемных сайтов
+        return None
 
 # Основная логика
 def main():
-    if not api_key or not cx:
-        print("Ошибка: Не удалось загрузить GOOGLE_API_KEY или GOOGLE_CSE_ID из .env файла.")
-        return
+    # Путь к файлу со списком сайтов
+    file_path = "websites.txt"
 
-    # Параметры запроса к Google API
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "key": api_key,
-        "cx": cx,
-        "q": query,
-        "num": 10,
-        "start": 1
-    }
+    # Загружаем список сайтов
+    websites = load_websites(file_path)
+    if not websites:
+        print("Список сайтов пуст или файл 'websites.txt' не найден.")
+        return
 
     # Списки для данных
     websites_data = []
     failed_websites = []
 
-    # Парсинг Google API
-    for start in range(1, 101, 10):  # До 100 результатов
-        params["start"] = start
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            for item in data.get("items", []):
-                website = item["link"]
-                print(f"Обрабатываю: {website}")
-                result = parse_website(website)
-                if result:
-                    websites_data.append(result)
-                else:
-                    failed_websites.append({"website": website})
-        except requests.RequestException as e:
-            print(f"Ошибка Google API: {e}")
-            break
-
-    # Имена файлов с учетом города
-    output_file = f"printing_companies_{city}.xlsx"
-    failed_file = f"failed_websites_{city}.json"
+    # Парсинг каждого сайта
+    for website in websites:
+        print(f"Обрабатываю: {website}")
+        result = parse_website(website)
+        if result:
+            websites_data.append(result)
+        else:
+            failed_websites.append({"website": website})
 
     # Сохранение успешных данных в XLSX
     df = pd.DataFrame(websites_data)
+    output_file = "printing_companies.xlsx"
     df.to_excel(output_file, index=False, engine='openpyxl')
     print(f"Успешные данные сохранены в '{output_file}'")
 
     # Сохранение проблемных сайтов в JSON
-    with open(failed_file, "w", encoding='utf-8') as f:
+    with open("failed_websites.json", "w", encoding='utf-8') as f:
         json.dump(failed_websites, f, ensure_ascii=False, indent=4)
-    print(f"Проблемные сайты сохранены в '{failed_file}'")
+    print("Проблемные сайты сохранены в 'failed_websites.json'")
 
 if __name__ == "__main__":
     main()
