@@ -5,9 +5,12 @@ import pandas as pd
 import re
 from urllib.parse import urlparse
 
-# API-ключ и ID поисковой системы
-api_key = "AIzaSyCniNNbg8YtwonEJ69d6hCyOPnPmcpP6B0"
-cx = "863d7a2389bb24771"
+# Ваш API-ключ и ID поисковой системы
+api_key = "YOUR_API_KEY"
+cx = "YOUR_CSE_ID"
+
+# Город для поиска (можно менять)
+city = "Кемерово"
 
 # Заголовки для имитации браузера
 headers = {
@@ -18,8 +21,8 @@ headers = {
 phone_pattern = re.compile(r'(\+?\d[\d\s()-]{8,}\d)')
 email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
 
-# Запрос для поиска полиграфических услуг в Кемерово
-query = "полиграфические услуги типография Кемерово site:*.ru | site:*.com -inurl:(форум | блог)"
+# Запрос для поиска полиграфических услуг в указанном городе
+query = f"полиграфические услуги типография {city} site:*.ru | site:*.com -inurl:(форум | блог)"
 
 # Функция парсинга сайта
 def parse_website(url):
@@ -31,7 +34,6 @@ def parse_website(url):
         try:
             soup = BeautifulSoup(response.content, 'html.parser', from_encoding=response.encoding)
         except UnicodeDecodeError:
-            # Если кодировка некорректна, пробуем принудительно UTF-8 с заменой ошибок
             soup = BeautifulSoup(response.content.decode('utf-8', errors='replace'), 'html.parser')
 
         # 1. Наименование компании
@@ -39,22 +41,22 @@ def parse_website(url):
         if not company_name or company_name == "Не найдено":
             h1 = soup.find('h1')
             company_name = h1.text.strip() if h1 else "Не найдено"
-        # Очистка от некорректных символов
         company_name = ''.join(c if ord(c) < 128 or c.isprintable() else ' ' for c in company_name)
 
         # 2. Адрес сайта
         website = url
 
-        # 3. Номер телефона
-        phone = "Не найдено"
+        # 3. Все номера телефонов
+        phones = []
         for text in soup.stripped_strings:
             try:
-                phone_match = phone_pattern.search(text)
-                if phone_match:
-                    phone = phone_match.group()
-                    break
+                phone_matches = phone_pattern.findall(text)
+                for match in phone_matches:
+                    if match not in phones:  # Убираем дубликаты
+                        phones.append(match.strip())
             except UnicodeDecodeError:
                 continue
+        phone_str = ", ".join(phones) if phones else "Не найдено"
 
         # 4. Email
         email = "Не найдено"
@@ -81,14 +83,14 @@ def parse_website(url):
         return {
             "Наименование Компании": company_name,
             "Адрес сайта": website,
-            "Номер телефона": phone,
+            "Номер телефона": phone_str,
             "Email": email,
             "Печатные машины": printing_machines
         }
 
     except (requests.RequestException, Exception) as e:
         print(f"Ошибка при парсинге {url}: {e}")
-        return None  # Возвращаем None для проблемных сайтов
+        return None
 
 # Основная логика
 def main():
@@ -127,8 +129,9 @@ def main():
 
     # Сохранение успешных данных в XLSX
     df = pd.DataFrame(websites_data)
-    df.to_excel("printing_companies_kemerovo.xlsx", index=False, engine='openpyxl')
-    print("Успешные данные сохранены в 'printing_companies_kemerovo.xlsx'")
+    output_file = f"printing_companies_{city}.xlsx"
+    df.to_excel(output_file, index=False, engine='openpyxl')
+    print(f"Успешные данные сохранены в '{output_file}'")
 
     # Сохранение проблемных сайтов в JSON
     with open("failed_websites.json", "w", encoding='utf-8') as f:
@@ -137,42 +140,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# Запрос для поиска полиграфических услуг в Кемерово
-query = "полиграфические услуги типография Кемерово site:*.ru | site:*.com -inurl:(форум | блог)"
-
-# Параметры запроса
-url = "https://www.googleapis.com/customsearch/v1"
-params = {
-    "key": api_key,
-    "cx": cx,
-    "q": query,
-    "num": 10,  # Количество результатов на страницу (максимум 10)
-    "start": 1  # Начальная позиция
-}
-
-# Список для хранения сайтов
-websites = []
-
-# Выполняем запросы (Google возвращает максимум 100 результатов, нужно пагинацию)
-for start in range(1, 101, 10):  # До 100 результатов
-    params["start"] = start
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
-        data = response.json()
-        for item in data.get("items", []):
-            website = item["link"]
-            websites.append({"website": website})
-    else:
-        print(f"Ошибка: {response.status_code}")
-        break
-
-# Сохранение в JSON
-with open("printing_companies_kemerovo.json", "w", encoding='utf-8') as f:
-    json.dump(websites, f, ensure_ascii=False, indent=4)
-
-# Сохранение в XLSX
-df = pd.DataFrame(websites)
-df.to_excel("printing_companies_kemerovo.xlsx", index=False, engine='openpyxl')
-
-print("Данные сохранены в printing_companies_kemerovo.json и printing_companies_kemerovo.xlsx")
